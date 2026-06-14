@@ -11,7 +11,6 @@ const ATIVOS_PADRAO = [
 
 const ATIVOS_LIVRES = ['PETR4', 'VALE3', 'ITUB4', 'MGLU3'];
 
-// Calcula RSI
 function calcularRSI(precos, periodo = 14) {
   if (precos.length < periodo + 1) return null;
   let ganhos = 0, perdas = 0;
@@ -36,7 +35,6 @@ function calcularRSI(precos, periodo = 14) {
   return 100 - (100 / (1 + rs));
 }
 
-// Média móvel simples
 function calcularMedia(precos, periodo) {
   if (precos.length < periodo) return null;
   const slice = precos.slice(-periodo);
@@ -234,11 +232,23 @@ export default function App() {
 
   async function buscarDolar() {
     try {
-      const resp = await fetch(`https://brapi.dev/api/v2/currency?currency=USD-BRL`);
-      if (!resp.ok) return;
+      const tokenParam = token ? `&token=${token}` : '';
+      const resp = await fetch(`https://brapi.dev/api/v2/currency?currency=USD-BRL${tokenParam}`);
+      if (!resp.ok) {
+        let msg = `Erro ${resp.status}`;
+        try {
+          const errJson = await resp.json();
+          if (errJson?.message) msg = errJson.message;
+        } catch (e) {}
+        setDadosDolar({ erro: msg });
+        return;
+      }
       const json = await resp.json();
       const c = json.currency?.[0];
-      if (!c) return;
+      if (!c) {
+        setDadosDolar({ erro: 'Resposta sem dados de cotação' });
+        return;
+      }
 
       const resultado = {
         valor: parseFloat(c.bidPrice),
@@ -272,7 +282,9 @@ export default function App() {
       }
 
       setDadosDolar(resultado);
-    } catch (e) {}
+    } catch (e) {
+      setDadosDolar({ erro: `Falha de rede: ${e.message}` });
+    }
   }
 
   async function carregarDados() {
@@ -391,7 +403,7 @@ export default function App() {
                 </button>
               </div>
               <p className="text-xs text-slate-500 mt-2">
-                O token fica salvo apenas no seu navegador (localStorage), não é enviado para nenhum servidor além da brapi.dev.
+                O token fica salvo apenas no seu navegador, não é enviado para nenhum servidor além da brapi.dev.
               </p>
             </div>
           ) : (
@@ -487,7 +499,11 @@ export default function App() {
             {loading && !dadosDolar && (
               <div className="h-20 bg-slate-700 rounded animate-pulse"></div>
             )}
-            {dadosDolar ? (
+            {dadosDolar?.erro ? (
+              <div className="bg-red-900/20 border border-red-900/50 rounded-lg p-3 text-sm text-red-400">
+                Erro: {dadosDolar.erro}
+              </div>
+            ) : dadosDolar ? (
               <div>
                 <div className="flex items-end gap-3">
                   <p className="text-3xl font-bold">R$ {dadosDolar.valor.toFixed(4)}</p>
