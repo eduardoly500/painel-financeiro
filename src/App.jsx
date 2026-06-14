@@ -232,54 +232,44 @@ export default function App() {
 
   async function buscarDolar() {
     try {
-      const tokenParam = token ? `&token=${token}` : '';
-      const resp = await fetch(`https://brapi.dev/api/v2/currency?currency=USD-BRL${tokenParam}`);
+      const resp = await fetch('https://economia.awesomeapi.com.br/json/last/USD-BRL');
       if (!resp.ok) {
-        let msg = `Erro ${resp.status}`;
-        try {
-          const errJson = await resp.json();
-          if (errJson?.message) msg = errJson.message;
-        } catch (e) {}
-        setDadosDolar({ erro: msg });
+        setDadosDolar({ erro: `Erro ${resp.status} ao buscar cotação` });
         return;
       }
       const json = await resp.json();
-      const c = json.currency?.[0];
+      const c = json.USDBRL;
       if (!c) {
         setDadosDolar({ erro: 'Resposta sem dados de cotação' });
         return;
       }
 
       const resultado = {
-        valor: parseFloat(c.bidPrice),
-        variacaoPercent: parseFloat(c.percentageChange),
-        atualizadoEm: c.updatedAtDate,
+        valor: parseFloat(c.bid),
+        variacaoPercent: parseFloat(c.pctChange),
+        atualizadoEm: c.create_date,
         historico: null,
         rsi: null,
         sinal: null,
       };
 
-      if (token) {
-        try {
-          const respHist = await fetch(
-            `https://brapi.dev/api/v2/currency?currency=USD-BRL&range=3mo&interval=1d&token=${token}`
-          );
-          if (respHist.ok) {
-            const jsonHist = await respHist.json();
-            const histData = jsonHist.currency?.[0]?.historicalDataPrice;
-            if (histData && histData.length > 21) {
-              const precos = histData.map(h => h.close).filter(p => p != null);
-              const historico = histData.slice(-30).map(h => ({
-                data: new Date(h.date * 1000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
-                preco: h.close,
-              }));
-              resultado.historico = historico;
-              resultado.rsi = calcularRSI(precos);
-              resultado.sinal = gerarSinal(precos, resultado.rsi);
-            }
+      try {
+        const respHist = await fetch('https://economia.awesomeapi.com.br/json/daily/USD-BRL/40');
+        if (respHist.ok) {
+          const histData = await respHist.json();
+          if (Array.isArray(histData) && histData.length > 21) {
+            const ordenado = [...histData].reverse();
+            const precos = ordenado.map(h => parseFloat(h.bid)).filter(p => !isNaN(p));
+            const historico = ordenado.slice(-30).map(h => ({
+              data: new Date(parseInt(h.timestamp) * 1000).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }),
+              preco: parseFloat(h.bid),
+            }));
+            resultado.historico = historico;
+            resultado.rsi = calcularRSI(precos);
+            resultado.sinal = gerarSinal(precos, resultado.rsi);
           }
-        } catch (e) {}
-      }
+        }
+      } catch (e) {}
 
       setDadosDolar(resultado);
     } catch (e) {
@@ -376,7 +366,7 @@ export default function App() {
           {!token ? (
             <div>
               <p className="text-xs text-slate-400 mb-2">
-                Cole seu token gratuito (criado em <span className="text-blue-400">brapi.dev/dashboard</span>) para liberar qualquer ação da B3 e análise técnica do dólar. Sem token, funcionam apenas PETR4, VALE3, ITUB4 e MGLU3.
+                Cole seu token gratuito (criado em <span className="text-blue-400">brapi.dev/dashboard</span>) para liberar qualquer ação da B3. Sem token, funcionam apenas PETR4, VALE3, ITUB4 e MGLU3.
               </p>
               <div className="flex gap-2">
                 <div className="relative flex-1">
@@ -555,9 +545,7 @@ export default function App() {
                   </>
                 ) : (
                   <div className="mt-4 bg-slate-900/50 rounded-lg p-3 text-sm text-slate-400">
-                    {token
-                      ? 'Histórico do dólar não disponível para análise técnica neste momento.'
-                      : 'Adicione um token gratuito da brapi (acima) para liberar gráfico e análise técnica (RSI) do dólar.'}
+                    Histórico do dólar não disponível para análise técnica neste momento.
                   </div>
                 )}
               </div>
