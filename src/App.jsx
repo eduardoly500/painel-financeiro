@@ -41,25 +41,122 @@ function calcularMedia(precos, periodo) {
   return slice.reduce((a, b) => a + b, 0) / periodo;
 }
 
+// Média móvel exponencial (série completa, necessária para MACD)
+function calcularEMASerie(precos, periodo) {
+  if (precos.length < periodo) return [];
+  const k = 2 / (periodo + 1);
+  const emas = [];
+  let emaAnterior = precos.slice(0, periodo).reduce((a, b) => a + b, 0) / periodo;
+  emas[periodo - 1] = emaAnterior;
+  for (let i = periodo; i < precos.length; i++) {
+    emaAnterior = precos[i] * k + emaAnterior * (1 - k);
+    emas[i] = emaAnterior;
+  }
+  return emas;
+}
+
+// MACD: retorna dados do último ponto
+function calcularMACD(precos, periodoRapido = 12, periodoLento = 26, periodoSinal = 9) {
+  if (precos.length < periodoLento + periodoSinal) return null;
+
+  const emaRapida = calcularEMASerie(precos, periodoRapido);
+  const emaLenta = calcularEMASerie(precos, periodoLento);
+
+  const macdSerie = [];
+  for (let i = 0; i < precos.length; i++) {
+    if (emaRapida[i] != null && emaLenta[i] != null) {
+      macdSerie[i] = emaRapida[i] - emaLenta[i];
+    }
+  }
+
+  const macdValores = macdSerie.filter(v => v != null);
+  if (macdValores.length < periodoSinal) return null;
+
+  const signalSerie = calcularEMASerie(macdValores, periodoSinal);
+  const macdLine = macdValores[macdValores.length - 1];
+  const signalLine = signalSerie[signalSerie.length - 1];
+  const macdLineAnterior = macdValores[macdValores.length - 2];
+  const signalLineAnterior = signalSerie[signalSerie.length - 2];
+
+  if (signalLine == null) return null;
+
+  return {
+    macdLine,
+    signalLine,
+    histograma: macdLine - signalLine,
+    cruzouParaCima: macdLineAnterior != null && signalLineAnterior != null &&
+      macdLineAnterior <= signalLineAnterior && macdLine > signalLine,
+    cruzouParaBaixo: macdLineAnterior != null && signalLineAnterior != null &&
+      macdLineAnterior >= signalLineAnterior && macdLine < signalLine,
+  };
+}
+
+// Bandas de Bollinger: posição do preço relativa às bandas
+function calcularBollinger(precos, periodo = 20, desvios = 2) {
+  if (precos.length < periodo) return null;
+  const slice = precos.slice(-periodo);
+  const media = slice.reduce((a, b) => a + b, 0) / periodo;
+  const variancia = slice.reduce((acc, v) => acc + Math.pow(v - media, 2), 0) / periodo;
+  const desvioPadrao = Math.sqrt(variancia);
+
+  const bandaSuperior = media + desvios * desvioPadrao;
+  const bandaInferior = media - desvios * desvioPadrao;
+  const precoAtual = precos[precos.length - 1];
+
+  const largura = bandaSuperior - bandaInferior;
+  const posicao = largura > 0 ? (precoAtual - bandaInferior) / largura : 0.5;
+
+  return { bandaSuperior, bandaInferior, media, posicao };
+}
+
 function gerarSinal(precos, rsi) {
-  if (!rsi || precos.length < 21) return { tipo: 'aguardando', texto: 'Dados insuficientes', cor: 'gray' };
+  if (!rsi || precos.length < 30) return { tipo: 'aguardando', texto: 'Dados insuficientes', cor: 'gray', detalhes: null };
 
   const mediaCurta = calcularMedia(precos, 9);
   const mediaLonga = calcularMedia(precos, 21);
+  const macd = calcularMACD(precos);
+  const bollinger = calcularBollinger(precos);
 
-  if (rsi < 33 && mediaCurta > mediaLonga) {
-    return { tipo: 'compra', texto: 'Possível ponto de COMPRA', cor: 'green' };
+  const detalhes = {
+    rsi: rsi?.toFixed(1),
+    macdHistograma: macd?.histograma?.toFixed(4),
+    bollingerPosicao: bollinger?.posicao != null ? (bollinger.posicao * 100).toFixed(0) + '%' : null,
+  };
+
+  if (!macd || !bollinger) {
+    if (rsi < 33 && mediaCurta > mediaLonga) {
+      return { tipo: 'compra', texto: 'Possível ponto de COMPRA', cor: 'green', detalhes };
+    }
+    if (rsi > 68 && mediaCurta < mediaLonga) {
+      return { tipo: 'venda', texto: 'Possível ponto de VENDA', cor: 'red', detalhes };
+    }
+    return { tipo: 'neutro', texto: 'Sem sinal claro - aguardar', cor: 'gray', detalhes };
   }
-  if (rsi > 68 && mediaCurta < mediaLonga) {
-    return { tipo: 'venda', texto: 'Possível ponto de VENDA', cor: 'red' };
+
+  const rsiCompra = rsi < 33;
+  const macdCompra = macd.histograma > 0 || macd.cruzouParaCima;
+  const bollingerCompra = bollinger.posicao < 0.25;
+
+  const rsiVenda = rsi > 68;
+  const macdVenda = macd.histograma < 0 || macd.cruzouParaBaixo;
+  const bollingerVenda = bollinger.posicao > 0.75;
+
+  const votosCompra = [rsiCompra, macdCompra, bollingerCompra].filter(Boolean).length;
+  const votosVenda = [rsiVenda, macdVenda, bollingerVenda].filter(Boolean).length;
+
+  if (rsiCompra && votosCompra >= 2) {
+    return { tipo: 'compra', texto: 'COMPRA (confluência de indicadores)', cor: 'green', detalhes };
   }
-  if (rsi < 33) {
-    return { tipo: 'observar_compra', texto: 'Sobrevendido - observar', cor: 'yellow' };
+  if (rsiVenda && votosVenda >= 2) {
+    return { tipo: 'venda', texto: 'VENDA (confluência de indicadores)', cor: 'red', detalhes };
   }
-  if (rsi > 68) {
-    return { tipo: 'observar_venda', texto: 'Sobrecomprado - observar', cor: 'yellow' };
+  if (rsiCompra || bollingerCompra) {
+    return { tipo: 'observar_compra', texto: 'Sobrevendido - observar', cor: 'yellow', detalhes };
   }
-  return { tipo: 'neutro', texto: 'Sem sinal claro - aguardar', cor: 'gray' };
+  if (rsiVenda || bollingerVenda) {
+    return { tipo: 'observar_venda', texto: 'Sobrecomprado - observar', cor: 'yellow', detalhes };
+  }
+  return { tipo: 'neutro', texto: 'Sem sinal claro - aguardar', cor: 'gray', detalhes };
 }
 
 function CardAtivo({ ticker, nome, dados, loading, erro, onRemover, podeRemover }) {
@@ -155,6 +252,16 @@ function CardAtivo({ ticker, nome, dados, loading, erro, onRemover, podeRemover 
           {sinal.texto}
         </div>
       </div>
+      {sinal.detalhes && (sinal.detalhes.macdHistograma != null || sinal.detalhes.bollingerPosicao != null) && (
+        <div className="flex gap-3 mt-2 text-xs text-slate-500">
+          {sinal.detalhes.macdHistograma != null && (
+            <span>MACD hist: {sinal.detalhes.macdHistograma}</span>
+          )}
+          {sinal.detalhes.bollingerPosicao != null && (
+            <span>Posição Bollinger: {sinal.detalhes.bollingerPosicao}</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -183,7 +290,7 @@ export default function App() {
 
     try {
       const resp = await fetch(
-        `https://brapi.dev/api/quote/${ticker}?range=3mo&interval=1d${tokenParam}`
+        `https://brapi.dev/api/quote/${ticker}?range=6mo&interval=1d${tokenParam}`
       );
       if (!resp.ok) {
         let msg = `Erro ${resp.status}`;
@@ -254,10 +361,10 @@ export default function App() {
       };
 
       try {
-        const respHist = await fetch('https://economia.awesomeapi.com.br/json/daily/USD-BRL/40');
+        const respHist = await fetch('https://economia.awesomeapi.com.br/json/daily/USD-BRL/60');
         if (respHist.ok) {
           const histData = await respHist.json();
-          if (Array.isArray(histData) && histData.length > 21) {
+          if (Array.isArray(histData) && histData.length > 35) {
             const ordenado = [...histData].reverse();
             const precos = ordenado.map(h => parseFloat(h.bid)).filter(p => !isNaN(p));
             const historico = ordenado.slice(-30).map(h => ({
@@ -340,7 +447,7 @@ export default function App() {
           <div>
             <h1 className="text-2xl font-bold">Painel de Análise Financeira</h1>
             <p className="text-sm text-slate-400 mt-1">
-              Sinais baseados em RSI e médias móveis · Apenas para fins informativos
+              Sinais baseados em RSI, MACD e Bandas de Bollinger · Apenas para fins informativos
             </p>
           </div>
           <button
@@ -474,10 +581,11 @@ export default function App() {
             <div className="mt-5 bg-slate-800/50 border border-slate-700 rounded-xl p-4 text-sm text-slate-400">
               <p className="font-medium text-slate-300 mb-1">Como interpretar os sinais</p>
               <ul className="space-y-1 list-disc list-inside">
-                <li>RSI abaixo de 33 = ativo sobrevendido (possível força para subir)</li>
-                <li>RSI acima de 68 = ativo sobrecomprado (possível força para cair)</li>
-                <li>Sinal de COMPRA: RSI baixo + média curta acima da média longa</li>
-                <li>Sinal de VENDA: RSI alto + média curta abaixo da média longa</li>
+                <li>RSI abaixo de 33 = sobrevendido · acima de 68 = sobrecomprado</li>
+                <li>MACD: histograma positivo favorece compra, negativo favorece venda</li>
+                <li>Bandas de Bollinger: posição perto de 0% = próximo da banda inferior, perto de 100% = próximo da banda superior</li>
+                <li>Sinal forte de COMPRA/VENDA exige RSI no extremo + confirmação de pelo menos mais 1 indicador</li>
+                <li>"Observar" = sinal parcial, sem confluência suficiente ainda</li>
               </ul>
             </div>
           </div>
@@ -528,19 +636,31 @@ export default function App() {
                       </ResponsiveContainer>
                     </div>
                     {dadosDolar.sinal && (
-                      <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700">
-                        <div className="text-xs text-slate-400">
-                          RSI: <span className="font-semibold text-slate-200">{dadosDolar.rsi?.toFixed(1) ?? '-'}</span>
+                      <>
+                        <div className="flex items-center justify-between mt-3 pt-3 border-t border-slate-700">
+                          <div className="text-xs text-slate-400">
+                            RSI: <span className="font-semibold text-slate-200">{dadosDolar.rsi?.toFixed(1) ?? '-'}</span>
+                          </div>
+                          <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
+                            dadosDolar.sinal.cor === 'green' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
+                            dadosDolar.sinal.cor === 'red' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                            dadosDolar.sinal.cor === 'yellow' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' :
+                            'bg-slate-500/15 text-slate-400 border-slate-500/30'
+                          }`}>
+                            {dadosDolar.sinal.texto}
+                          </div>
                         </div>
-                        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium border ${
-                          dadosDolar.sinal.cor === 'green' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
-                          dadosDolar.sinal.cor === 'red' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
-                          dadosDolar.sinal.cor === 'yellow' ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30' :
-                          'bg-slate-500/15 text-slate-400 border-slate-500/30'
-                        }`}>
-                          {dadosDolar.sinal.texto}
-                        </div>
-                      </div>
+                        {dadosDolar.sinal.detalhes && (dadosDolar.sinal.detalhes.macdHistograma != null || dadosDolar.sinal.detalhes.bollingerPosicao != null) && (
+                          <div className="flex gap-3 mt-2 text-xs text-slate-500">
+                            {dadosDolar.sinal.detalhes.macdHistograma != null && (
+                              <span>MACD hist: {dadosDolar.sinal.detalhes.macdHistograma}</span>
+                            )}
+                            {dadosDolar.sinal.detalhes.bollingerPosicao != null && (
+                              <span>Posição Bollinger: {dadosDolar.sinal.detalhes.bollingerPosicao}</span>
+                            )}
+                          </div>
+                        )}
+                      </>
                     )}
                   </>
                 ) : (
@@ -548,6 +668,10 @@ export default function App() {
                     Histórico do dólar não disponível para análise técnica neste momento.
                   </div>
                 )}
+
+                <div className="mt-4 bg-yellow-900/20 border border-yellow-900/30 rounded-lg p-3 text-xs text-yellow-300/80">
+                  Atenção: o dólar é fortemente influenciado por fatores macroeconômicos (juros, política, fluxo de capital) que estes indicadores técnicos não capturam. Use como apoio, não como única base de decisão.
+                </div>
               </div>
             ) : (
               !loading && (
