@@ -41,7 +41,6 @@ function calcularMedia(precos, periodo) {
   return slice.reduce((a, b) => a + b, 0) / periodo;
 }
 
-// Média móvel exponencial (série completa, necessária para MACD)
 function calcularEMASerie(precos, periodo) {
   if (precos.length < periodo) return [];
   const k = 2 / (periodo + 1);
@@ -55,7 +54,6 @@ function calcularEMASerie(precos, periodo) {
   return emas;
 }
 
-// MACD: retorna dados do último ponto
 function calcularMACD(precos, periodoRapido = 12, periodoLento = 26, periodoSinal = 9) {
   if (precos.length < periodoLento + periodoSinal) return null;
 
@@ -91,7 +89,6 @@ function calcularMACD(precos, periodoRapido = 12, periodoLento = 26, periodoSina
   };
 }
 
-// Bandas de Bollinger: posição do preço relativa às bandas
 function calcularBollinger(precos, periodo = 20, desvios = 2) {
   if (precos.length < periodo) return null;
   const slice = precos.slice(-periodo);
@@ -107,6 +104,40 @@ function calcularBollinger(precos, periodo = 20, desvios = 2) {
   const posicao = largura > 0 ? (precoAtual - bandaInferior) / largura : 0.5;
 
   return { bandaSuperior, bandaInferior, media, posicao };
+}
+
+function calcularTendencia(precos) {
+  const mediaCurta = calcularMedia(precos, 9);
+  const mediaLonga = calcularMedia(precos, 21);
+  const macd = calcularMACD(precos);
+
+  if (mediaCurta == null || mediaLonga == null) {
+    return { direcao: 'lateral', texto: 'Indefinida', cor: 'gray' };
+  }
+
+  const diffPercent = ((mediaCurta - mediaLonga) / mediaLonga) * 100;
+  const macdPositivo = macd ? macd.histograma > 0 : null;
+  const macdNegativo = macd ? macd.histograma < 0 : null;
+
+  const limiarLateral = 0.15;
+
+  if (diffPercent > limiarLateral) {
+    const forte = macdPositivo === true;
+    return {
+      direcao: 'alta',
+      texto: forte ? 'ALTA (confirmada)' : 'ALTA',
+      cor: 'green',
+    };
+  }
+  if (diffPercent < -limiarLateral) {
+    const forte = macdNegativo === true;
+    return {
+      direcao: 'baixa',
+      texto: forte ? 'BAIXA (confirmada)' : 'BAIXA',
+      cor: 'red',
+    };
+  }
+  return { direcao: 'lateral', texto: 'LATERAL', cor: 'gray' };
 }
 
 function gerarSinal(precos, rsi) {
@@ -195,8 +226,14 @@ function CardAtivo({ ticker, nome, dados, loading, erro, onRemover, podeRemover 
 
   if (!dados) return null;
 
-  const { precoAtual, variacao, variacaoPercent, historico, rsi, sinal } = dados;
+  const { precoAtual, variacao, variacaoPercent, historico, rsi, sinal, tendencia } = dados;
   const SinalIcon = sinal.tipo === 'compra' ? TrendingUp : sinal.tipo === 'venda' ? TrendingDown : Minus;
+  const TendenciaIcon = tendencia?.direcao === 'alta' ? TrendingUp : tendencia?.direcao === 'baixa' ? TrendingDown : Minus;
+  const tendenciaCores = {
+    green: 'bg-green-500/15 text-green-400 border-green-500/30',
+    red: 'bg-red-500/15 text-red-400 border-red-500/30',
+    gray: 'bg-slate-500/15 text-slate-400 border-slate-500/30',
+  };
 
   return (
     <div className="bg-slate-800 rounded-xl p-5 border border-slate-700 hover:border-slate-600 transition-colors relative">
@@ -217,6 +254,12 @@ function CardAtivo({ ticker, nome, dados, loading, erro, onRemover, podeRemover 
           <p className={`text-sm font-medium ${variacao >= 0 ? 'text-green-400' : 'text-red-400'}`}>
             {variacao >= 0 ? '+' : ''}{variacaoPercent?.toFixed(2)}%
           </p>
+          {tendencia && (
+            <div className={`inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-medium border ${tendenciaCores[tendencia.cor]}`}>
+              <TendenciaIcon size={12} />
+              {tendencia.texto}
+            </div>
+          )}
         </div>
       </div>
 
@@ -322,6 +365,7 @@ export default function App() {
 
       const rsi = calcularRSI(precos);
       const sinal = gerarSinal(precos, rsi);
+      const tendencia = calcularTendencia(precos);
 
       return {
         precoAtual: r.regularMarketPrice,
@@ -330,6 +374,7 @@ export default function App() {
         historico,
         rsi,
         sinal,
+        tendencia,
         nomeCompleto: r.shortName || r.longName,
       };
     } catch (e) {
@@ -358,6 +403,7 @@ export default function App() {
         historico: null,
         rsi: null,
         sinal: null,
+        tendencia: null,
       };
 
       try {
@@ -374,6 +420,7 @@ export default function App() {
             resultado.historico = historico;
             resultado.rsi = calcularRSI(precos);
             resultado.sinal = gerarSinal(precos, resultado.rsi);
+            resultado.tendencia = calcularTendencia(precos);
           }
         }
       } catch (e) {}
@@ -581,10 +628,11 @@ export default function App() {
             <div className="mt-5 bg-slate-800/50 border border-slate-700 rounded-xl p-4 text-sm text-slate-400">
               <p className="font-medium text-slate-300 mb-1">Como interpretar os sinais</p>
               <ul className="space-y-1 list-disc list-inside">
+                <li><strong>Tendência (ALTA/BAIXA/LATERAL)</strong>: direção atual do movimento, baseada nas médias móveis e MACD. "Confirmada" = MACD reforça a direção.</li>
                 <li>RSI abaixo de 33 = sobrevendido · acima de 68 = sobrecomprado</li>
                 <li>MACD: histograma positivo favorece compra, negativo favorece venda</li>
                 <li>Bandas de Bollinger: posição perto de 0% = próximo da banda inferior, perto de 100% = próximo da banda superior</li>
-                <li>Sinal forte de COMPRA/VENDA exige RSI no extremo + confirmação de pelo menos mais 1 indicador</li>
+                <li><strong>Sinal de COMPRA/VENDA</strong> é diferente de tendência: indica possível ponto de reversão (RSI no extremo + confirmação de outro indicador)</li>
                 <li>"Observar" = sinal parcial, sem confluência suficiente ainda</li>
               </ul>
             </div>
@@ -608,6 +656,16 @@ export default function App() {
                   <p className={`text-sm font-medium pb-1 ${dadosDolar.variacaoPercent >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                     {dadosDolar.variacaoPercent >= 0 ? '+' : ''}{dadosDolar.variacaoPercent.toFixed(2)}%
                   </p>
+                  {dadosDolar.tendencia && (
+                    <div className={`inline-flex items-center gap-1 pb-1 px-2 py-0.5 rounded-full text-xs font-medium border ${
+                      dadosDolar.tendencia.cor === 'green' ? 'bg-green-500/15 text-green-400 border-green-500/30' :
+                      dadosDolar.tendencia.cor === 'red' ? 'bg-red-500/15 text-red-400 border-red-500/30' :
+                      'bg-slate-500/15 text-slate-400 border-slate-500/30'
+                    }`}>
+                      {dadosDolar.tendencia.direcao === 'alta' ? <TrendingUp size={12} /> : dadosDolar.tendencia.direcao === 'baixa' ? <TrendingDown size={12} /> : <Minus size={12} />}
+                      {dadosDolar.tendencia.texto}
+                    </div>
+                  )}
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
                   Atualizado em: {dadosDolar.atualizadoEm}
